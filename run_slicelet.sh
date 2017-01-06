@@ -1,0 +1,1 @@
+ /Applications/Slicer.app/Contents/MacOS/Slicer --no-main-window --python-script LabelStatistics.py

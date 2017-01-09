@@ -8,11 +8,20 @@ import sys
 import logging
 from DICOMLib import DICOMUtils
 
-
+__doc__ = """
 # ------------------------------------------------------------------------------
 # BatchStructureSetConversion
 #   Convert structures in structure set to labelmaps and save them to disk
 #
+Examples
+---
+/Applications/Slicer.app/Contents/MacOS/Slicer --no-main-window --python-script /Users/mader/PycharmProjects/SlicerPluginTest/plugtest/BatchStructureSetConversion.py -i /Users/mader/sarcoma_petmri/SARCOMA_DB -o ~/test2 -x -m
+
+--no-main-window cannot be used in combination with -r (need to show the window to render it)
+
+/Applications/Slicer.app/Contents/MacOS/Slicer --python-script /Users/mader/PycharmProjects/SlicerPluginTest/plugtest/BatchStructureSetConversion.py -i /Users/mader/sarcoma_petmri/SARCOMA_DB -o ~/Desktop/test2  -x -m -r
+ """
+
 class BatchStructureSetConversion(ScriptedLoadableModule):
     def __init__(self, parent):
         ScriptedLoadableModule.__init__(self, parent)
@@ -75,7 +84,7 @@ class BatchStructureSetConversionLogic(ScriptedLoadableModuleLogic):
         # Open an existing database
         try:
             if not os.access(path, os.F_OK):
-                raise RuntimeError("Database cannot be found!", path)
+                logging.error("Database cannot be found! %s" % path)
             self.originalDatabaseDirectory = os.path.split(path)[0]
             self.dicomWidget.onDatabaseDirectoryChanged(path)
         except Exception, e:
@@ -176,7 +185,10 @@ class BatchStructureSetConversionLogic(ScriptedLoadableModuleLogic):
                 logging.error('Failed to save labelmap: ' + filePath)
 
     def SaveImages(self, outputDir, node_key = 'vtkMRMLScalarVolumeNode*'):
-        for imageNode in slicer.util.getNodes(node_key).values():
+        # Save all of the ScalarVolumes (or whatever is in node_key) to NRRD files
+        sv_nodes = slicer.util.getNodes(node_key)
+        logging.info("Save image volumes nodes to directory %s: %s" % (outputDir, ','.join(sv_nodes.keys())))
+        for imageNode in sv_nodes.values():
             # Clean up file name and set path
             fileName = imageNode.GetName() + '.nrrd'
             charsRoRemove = ['!', '?', ':', ';']
@@ -188,7 +200,7 @@ class BatchStructureSetConversionLogic(ScriptedLoadableModuleLogic):
             # Save to file
             success = slicer.util.saveNode(imageNode, filePath)
             if not success:
-                logging.error('Failed to save labelmap: ' + filePath)
+                logging.error('Failed to save image-volume: ' + filePath)
 
 
 # ------------------------------------------------------------------------------
@@ -338,6 +350,46 @@ class BatchStructureSetConversionTest(ScriptedLoadableModuleTest):
 
         logging.info('Test finished')
 
+def display_volume(volumeNode):
+    # type: (slicer.vtkCommonCorePython.vtkMRMLScalarVolumeNode) -> vtkCommonCorePython.vtkMRMLScalarVolumeDisplayNode
+    displayNode = slicer.vtkMRMLScalarVolumeDisplayNode()
+    slicer.mrmlScene.AddNode(displayNode)
+    colorNode = slicer.util.getNode('Grey')
+    displayNode.SetAndObserveColorNodeID(colorNode.GetID())
+    volumeNode.SetAndObserveDisplayNodeID(displayNode.GetID())
+    volumeNode.CreateDefaultStorageNode()
+    return displayNode
+
+
+def display_volume(volumeNode):
+    # type: (slicer.vtkCommonCorePython.vtkMRMLScalarVolumeNode) -> vtkCommonCorePython.vtkMRMLScalarVolumeDisplayNode
+    displayNode = slicer.vtkMRMLScalarVolumeDisplayNode()
+    slicer.mrmlScene.AddNode(displayNode)
+    colorNode = slicer.util.getNode('Grey')
+    displayNode.SetAndObserveColorNodeID(colorNode.GetID())
+    volumeNode.SetAndObserveDisplayNodeID(displayNode.GetID())
+    volumeNode.CreateDefaultStorageNode()
+    return displayNode
+
+
+def render_volume(volumeNode, presetName = 'CT-AAA'):
+    # type: (slicer.vtkCommonCorePython.vtkMRMLScalarVolumeNode) -> vtkCommonCorePython.vtkMRMLCPURayCastVolumeRenderingDisplayNode
+    """
+    https://www.slicer.org/wiki/Documentation/4.6/Modules/VolumeRendering
+    :param volumeNode:
+    :return:
+    """
+    logic = slicer.modules.volumerendering.logic()
+    pname = logic.GetPresetByName('CT-Coronary-Arteries')
+    pname = logic.GetPresetByName(presetName)
+    displayNode = logic.CreateVolumeRenderingDisplayNode()
+
+    displayNode.UnRegister(logic)
+    logic.UpdateDisplayNodeFromVolumeNode(displayNode, volumeNode)
+    displayNode.SetAndObserveVolumePropertyNodeID(pname.GetID())
+    volumeNode.AddAndObserveDisplayNodeID(displayNode.GetID())
+    slicer.mrmlScene.AddNode(displayNode)
+    return displayNode
 
 def main(argv):
     try:
@@ -351,6 +403,9 @@ def main(argv):
         parser.add_argument("-m", "--export-images", dest="export_images",
                             default=False, required=False, action='store_true',
                             help="Export image data with labelmaps")
+        parser.add_argument("-r", "--render-scene", dest="render_scene",
+                            default=False, required=False, action='store_true',
+                            help="Render the scene as a PNG")
         parser.add_argument("-o", "--output-folder", dest="output_folder", metavar="PATH",
                             default=".", help="Folder for output labelmaps")
 
@@ -368,10 +423,38 @@ def main(argv):
         output_folder = args.output_folder.replace('\\', '/')
         exist_db = args.exist_db
         export_images = args.export_images
+        render_scene = args.render_scene
 
         # Perform batch conversion
         logic = BatchStructureSetConversionLogic()
         def save_rtslices(output_dir):
+            if render_scene:
+                lm = slicer.app.layoutManager()
+                assert lm is not None, "Layout manager is required for making 3D images"
+                for iname, inode in slicer.util.getNodes('vtkMRMLScalarVolumeNode*').items():
+                    if iname.find('CT')>=0:
+                        print('--- Rendering node as CT',iname)
+                        render_volume(inode)
+                    if iname.find('MR')>=0:
+                        print('--- Rendering node as MR',iname)
+                        render_volume(inode, presetName = 'MR-Default')
+                # make actual scene rendering
+                view = lm.threeDWidget(0).threeDView()
+                view.resetFocalPoint()
+                view.cornerAnnotation().SetText(vtk.vtkCornerAnnotation.UpperRight, output_dir)
+                screenshot_counter = 0
+                rw = view.renderWindow()
+                wti = vtk.vtkWindowToImageFilter()
+                wti.SetInput(rw)
+                wti.Update()
+                writer = vtk.vtkPNGWriter()
+                filename = os.path.join(output_dir, 'test_img.png')
+                screenshot_counter += 1
+                logging.info('Written screenshot to: ' + filename)
+                writer.SetFileName(filename)
+                writer.SetInputConnection(wti.GetOutputPort())
+                writer.Write()
+                view.forceRender()
             # package the saving code into a subfunction
             logging.info("Convert loaded structure set to labelmap volumes")
             labelmaps = logic.ConvertStructureSetToLabelmap()
@@ -379,11 +462,11 @@ def main(argv):
             logging.info("Save labelmaps to directory " + output_dir)
             logic.SaveLabelmaps(labelmaps, output_dir)
             if export_images:
-                logging.info("Save images to directory " + output_dir)
                 logic.SaveImages(output_dir)
             logging.info("DONE")
 
         if exist_db:
+            logging.info('BatchStructureSet Running in Existing Database Mode')
             logic.LoadDatabase(input_folder)
             all_patients = slicer.dicomDatabase.patients()
             logging.info('Must Process Patients %s' % len(all_patients))
